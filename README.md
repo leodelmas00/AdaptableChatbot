@@ -1,8 +1,8 @@
 # AdaptableChatbot
 
-Este repositorio fue creado para la creación y experimentación de un chatbot conversacional adaptable al usuario.
+Este repositorio fue creado para la experimentación con un chatbot conversacional de reservas de viajes para una investigación sobre la forma de las respuestas de chatbots basados en LLM.
 
-El chatbot utiliza modelos de lenguaje de Groq mediante LangChain y permite seleccionar el modelo a utilizar y configurar características de la respuesta, como su longitud y nivel de formalidad.
+El chatbot utiliza modelos de lenguaje de DeepInfra mediante LangChain y permite seleccionar el modelo al inicio de la sesión. Incluye tres condiciones experimentales controladas por configuración.
 
 ## Instalación
 
@@ -39,14 +39,7 @@ En Windows:
 pip install -r requirements.txt
 ```
 
-## ⚠️ Consumo de recursos
-
-Durante la instalación de las dependencias o la primera ejecución puede observarse un consumo elevado de CPU. Esto se debe principalmente a las dependencias utilizadas para generar embeddings, como `sentence-transformers`, y a la descarga y carga inicial del modelo de embeddings.
-
-Este comportamiento es normal y debería disminuir una vez completada la instalación y la inicialización.
-
-
-### 4. Configurar la API de Groq
+### 4. Configurar la API de DeepInfra
 
 Crear un archivo `.env` a partir de `.env.example`:
 
@@ -54,18 +47,24 @@ Crear un archivo `.env` a partir de `.env.example`:
 cp .env.example .env
 ```
 
-Luego agregar la API Key de Groq:
+Luego agregar la API Key de DeepInfra:
 
 ```env
-GROQ_API_KEY=your_groq_api_key_here
+DEEPINFRA_API_KEY=your_deepinfra_api_key_here
 ```
 
-### 5. Ejecutar
+### 5. Configurar la condición experimental
 
-Ejecuta cualquiera de los .py presentes, por ejemplo: `chat_noRAG.py`:
+En `chat_borrador.py`, la variable `CHATBOT_TYPE` define la condición:
+
+* `1` = Chatbot de control (sin módulos de longitud ni formalidad)
+* `2` = Chatbot con controles de longitud y formalidad
+* `3` = Chatbot con forma predefinida (Long + Formal)
+
+### 6. Ejecutar
 
 ```bash
-python chat_noRAG.py
+python chat_borrador.py
 ```
 
 La aplicación iniciará una interfaz web mediante Gradio.
@@ -75,8 +74,4 @@ La aplicación iniciará una interfaz web mediante Gradio.
 * Python
 * Gradio
 * LangChain
-* Groq
-* Chroma
-* Hugging Face
-* RAG
-* PyPDF
+* DeepInfra (API compatible con OpenAI)
