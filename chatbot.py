@@ -14,7 +14,7 @@ load_dotenv()
 # 1 = Solo chat
 # 2 = Chat + controles de longitud/formalidad
 # 3 = Chat modificado: Long + Formal
-CHATBOT_TYPE = 1
+CHATBOT_TYPE = int(os.getenv("CHATBOT_TYPE", "1"))
 
 
 # ============================================================
@@ -340,7 +340,7 @@ def start_chat(selected_model):
         selected_model,                 # Guardar modelo
         llm,                            # Guardar instancia
         gr.update(
-            value=MODEL_LABELS[selected_model]
+            value=selected_model
         ),
     )
 
@@ -396,57 +396,28 @@ with gr.Blocks() as demo:
         visible=False
     ) as main_screen:
 
-        with gr.Row():
-
-            # ------------------------------------------------
-            # CONFIGURACIÓN
-            # ------------------------------------------------
-
-            with gr.Column(scale=1):
-
-                gr.Markdown("### Configuration")
-
-                model = gr.Dropdown(
-                    choices=[
-                        (MODEL_LABELS[m], m)
-                        for m in MODELS
-                    ],
-                    value=DEFAULT_MODEL,
-                    label="Model",
-                    interactive=False,
-                )
+        model = gr.Dropdown(
+            choices=[
+                (MODEL_LABELS[m], m)
+                for m in MODELS
+            ],
+            value=DEFAULT_MODEL,
+            label="Model",
+            interactive=False,
+        )
 
 
-                # ============================================
-                # CHATBOT 1
-                # ============================================
+        # ============================================
+        # CHATBOT 2: configuración + chat
+        # ============================================
 
-                if CHATBOT_TYPE == 1:
+        if CHATBOT_TYPE == 2:
 
-                    length = gr.Radio(
-                        choices=["Short", "Long"],
-                        value="Short",
-                        label="Length",
-                        visible=False,
-                    )
+            with gr.Row():
 
-                    formality = gr.Radio(
-                        choices=["Informal", "Formal"],
-                        value="Informal",
-                        label="Formality",
-                        visible=False,
-                    )
+                with gr.Column(scale=1):
 
-                    gr.Markdown(
-                        "No response preferences are configured."
-                    )
-
-
-                # ============================================
-                # CHATBOT 2
-                # ============================================
-
-                elif CHATBOT_TYPE == 2:
+                    gr.Markdown("### Configuration")
 
                     length = gr.Radio(
                         choices=["Short", "Long"],
@@ -461,50 +432,52 @@ with gr.Blocks() as demo:
                     )
 
 
-                # ============================================
-                # CHATBOT 3
-                # ============================================
+                with gr.Column(scale=3):
 
-                elif CHATBOT_TYPE == 3:
-
-                    length = gr.Radio(
-                        choices=["Short", "Long"],
-                        value="Long",
-                        label="Length",
-                        visible=False,
-                    )
-
-                    formality = gr.Radio(
-                        choices=["Informal", "Formal"],
-                        value="Formal",
-                        label="Formality",
-                        visible=False,
-                    )
-
-                    gr.Markdown(
-                        "Response style: Long + Formal"
+                    gr.ChatInterface(
+                        fn=chat,
+                        additional_inputs=[
+                            llm,
+                            selected_model,
+                            length,
+                            formality,
+                        ],
+                        description=(
+                            "Travel planning assistant. "
+                            "The system is currently unavailable."
+                        ),
                     )
 
 
-            # ------------------------------------------------
-            # CHAT
-            # ------------------------------------------------
+        # ============================================
+        # CHATBOT 1 Y 3: solo chat, sin configuración
+        # ============================================
 
-            with gr.Column(scale=3):
+        else:
 
-                gr.ChatInterface(
-                    fn=chat,
-                    additional_inputs=[
-                        llm,
-                        selected_model,
-                        length,
-                        formality,
-                    ],
-                    description=(
-                        "Travel planning assistant. "
-                        "The system is currently unavailable."
-                    ),
-                )
+            if CHATBOT_TYPE == 1:
+                default_length = "Short"
+                default_formality = "Informal"
+            else:
+                default_length = "Long"
+                default_formality = "Formal"
+
+            length = gr.State(value=default_length)
+            formality = gr.State(value=default_formality)
+
+            gr.ChatInterface(
+                fn=chat,
+                additional_inputs=[
+                    llm,
+                    selected_model,
+                    length,
+                    formality,
+                ],
+                description=(
+                    "Travel planning assistant. "
+                    "The system is currently unavailable."
+                ),
+            )
 
 
     # --------------------------------------------------------
