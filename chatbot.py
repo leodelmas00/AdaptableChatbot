@@ -1,7 +1,11 @@
 import os
+import time
+import uuid
 import gradio as gr
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+
+from metrics import save_record, timestamp_now
 
 
 load_dotenv()
@@ -288,13 +292,17 @@ def chat(
     llm,
     selected_model,
     length,
-    formality
+    formality,
+    session_id
 ):
     """
     Envía solamente el mensaje actual al modelo.
 
     El historial visual de Gradio NO se envía al LLM.
     Por lo tanto, el chatbot no tiene memoria conversacional.
+
+    Además de devolver la respuesta, registra las métricas del turno
+    (timestamp, latencia, errores, etc.) de forma desacoplada.
     """
 
     system_prompt = build_system_prompt(
@@ -316,9 +324,49 @@ def chat(
         },
     ]
 
-    response = llm.invoke(messages)
+    # Valores efectivos según la condición experimental
+    if CHATBOT_TYPE == 1:
+        effective_length = None
+        effective_formality = None
+    elif CHATBOT_TYPE == 3:
+        effective_length = "Long"
+        effective_formality = "Formal"
+    else:
+        effective_length = length
+        effective_formality = formality
 
-    return response.content
+    turn = len(history) + 1
+
+    start = time.perf_counter()
+    error = None
+    response = None
+
+    try:
+        result = llm.invoke(messages)
+        response = result.content
+    except Exception as exc:
+        error = repr(exc)
+
+    latency_ms = (time.perf_counter() - start) * 1000
+
+    save_record({
+        "session_id": session_id,
+        "timestamp": timestamp_now(),
+        "chatbot_type": CHATBOT_TYPE,
+        "model": selected_model,
+        "turn": turn,
+        "length": effective_length,
+        "formality": effective_formality,
+        "user_message": message,
+        "response": response,
+        "latency_ms": latency_ms,
+        "error": error,
+    })
+
+    if error is not None:
+        return "I'm sorry, something went wrong. Please try again."
+
+    return response
 
 
 # ============================================================
@@ -330,9 +378,11 @@ def start_chat(selected_model):
     Se ejecuta una sola vez al seleccionar el modelo.
 
     El modelo queda bloqueado durante toda la sesión.
+    Se genera un session_id único para agrupar los turnos.
     """
 
     llm = create_llm(selected_model)
+    session_id = uuid.uuid4().hex
 
     return (
         gr.update(visible=False),       # Ocultar setup
@@ -342,6 +392,7 @@ def start_chat(selected_model):
         gr.update(
             value=selected_model
         ),
+        session_id,                     # Guardar id de sesión
     )
 
 
@@ -357,6 +408,7 @@ with gr.Blocks() as demo:
 
     selected_model = gr.State()
     llm = gr.State()
+    session_id = gr.State()
 
 
     # --------------------------------------------------------
@@ -441,6 +493,7 @@ with gr.Blocks() as demo:
                             selected_model,
                             length,
                             formality,
+                            session_id,
                         ],
                         description=(
                             "Travel planning assistant. "
@@ -472,6 +525,7 @@ with gr.Blocks() as demo:
                     selected_model,
                     length,
                     formality,
+                    session_id,
                 ],
                 description=(
                     "Travel planning assistant. "
@@ -493,6 +547,7 @@ with gr.Blocks() as demo:
             selected_model,
             llm,
             model,
+            session_id,
         ],
     )
 

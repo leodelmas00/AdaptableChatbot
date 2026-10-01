@@ -5,3 +5,5 @@ __pycache__/
 .env
 
 chroma_db/
+
+logs/
