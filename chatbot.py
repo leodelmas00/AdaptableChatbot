@@ -5,7 +5,16 @@ import gradio as gr
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
-from metrics import save_record, timestamp_now
+import formality as formality_clf
+import surveys
+from metrics import (
+    check_formality_compliance,
+    check_length_compliance,
+    hedge_density,
+    log_event,
+    sentence_count,
+    word_count,
+)
 
 
 load_dotenv()
@@ -335,10 +344,17 @@ def chat(
         effective_length = length
         effective_formality = formality
 
-    turn = len(history) + 1
+    # Un turno = un mensaje del usuario + la respuesta del asistente.
+    # En Gradio 6 el historial es una lista de mensajes estilo OpenAI
+    # (rol usuario/asistente), por lo que solo cuentan los "user".
+    turn = 1 + sum(
+        1 for m in history
+        if isinstance(m, dict) and m.get("role") == "user"
+    )
 
     start = time.perf_counter()
     error = None
+    error_type = None
     response = None
 
     try:
@@ -346,22 +362,55 @@ def chat(
         response = result.content
     except Exception as exc:
         error = repr(exc)
+        error_type = type(exc).__name__
 
     latency_ms = (time.perf_counter() - start) * 1000
 
-    save_record({
-        "session_id": session_id,
-        "timestamp": timestamp_now(),
-        "chatbot_type": CHATBOT_TYPE,
-        "model": selected_model,
-        "turn": turn,
-        "length": effective_length,
-        "formality": effective_formality,
-        "user_message": message,
-        "response": response,
-        "latency_ms": latency_ms,
-        "error": error,
-    })
+    # Métricas lingüísticas sobre la respuesta generada
+    if response is not None:
+        resp_words = word_count(response)
+        resp_sentences = sentence_count(response)
+        hedge_den = hedge_density(response)
+
+        try:
+            formality_label, formality_score = (
+                formality_clf.classify_formality(response)
+            )
+        except Exception:
+            formality_label = None
+            formality_score = None
+    else:
+        resp_words = None
+        resp_sentences = None
+        hedge_den = None
+        formality_label = None
+        formality_score = None
+
+    log_event(
+        "turn",
+        session_id=session_id,
+        chatbot_type=CHATBOT_TYPE,
+        model=selected_model,
+        turn=turn,
+        length=effective_length,
+        formality=effective_formality,
+        user_message=message,
+        response=response,
+        latency_ms=latency_ms,
+        error=error,
+        error_type=error_type,
+        word_count=resp_words,
+        sentence_count=resp_sentences,
+        hedge_density=hedge_den,
+        formality_label=formality_label,
+        formality_score=formality_score,
+        length_compliant=check_length_compliance(
+            resp_words, effective_length
+        ),
+        formality_compliant=check_formality_compliance(
+            formality_label, effective_formality
+        ),
+    )
 
     if error is not None:
         return "I'm sorry, something went wrong. Please try again."
@@ -384,6 +433,13 @@ def start_chat(selected_model):
     llm = create_llm(selected_model)
     session_id = uuid.uuid4().hex
 
+    log_event(
+        "session_start",
+        session_id=session_id,
+        model=selected_model,
+        chatbot_type=CHATBOT_TYPE,
+    )
+
     return (
         gr.update(visible=False),       # Ocultar setup
         gr.update(visible=True),        # Mostrar chat
@@ -393,6 +449,47 @@ def start_chat(selected_model):
             value=selected_model
         ),
         session_id,                     # Guardar id de sesión
+    )
+
+
+# ============================================================
+# CAMBIOS DE CONFIGURACIÓN
+# ============================================================
+
+def on_length_change(length, session_id):
+    """
+    Registra un cambio del control de longitud (Chatbot 2).
+    """
+
+    log_event(
+        "config_change",
+        session_id=session_id,
+        field="length",
+        new_value=length,
+    )
+
+
+def on_formality_change(formality, session_id):
+    """
+    Registra un cambio del control de formalidad (Chatbot 2).
+    """
+
+    log_event(
+        "config_change",
+        session_id=session_id,
+        field="formality",
+        new_value=formality,
+    )
+
+
+def finish_chat():
+    """
+    Oculta el chat y muestra la encuesta post-interacción.
+    """
+
+    return (
+        gr.update(visible=False),
+        gr.update(visible=True),
     )
 
 
@@ -448,28 +545,28 @@ with gr.Blocks() as demo:
         visible=False
     ) as main_screen:
 
-        model = gr.Dropdown(
-            choices=[
-                (MODEL_LABELS[m], m)
-                for m in MODELS
-            ],
-            value=DEFAULT_MODEL,
-            label="Model",
-            interactive=False,
-        )
+        with gr.Row(elem_id="main-row"):
 
+            # ------------------------------------------------
+            # CONFIGURACIÓN
+            # ------------------------------------------------
 
-        # ============================================
-        # CHATBOT 2: configuración + chat
-        # ============================================
+            with gr.Column(
+                scale=1,
+                elem_id="config-column",
+            ):
 
-        if CHATBOT_TYPE == 2:
+                model = gr.Dropdown(
+                    choices=[
+                        (MODEL_LABELS[m], m)
+                        for m in MODELS
+                    ],
+                    value=DEFAULT_MODEL,
+                    label="Model",
+                    interactive=False,
+                )
 
-            with gr.Row():
-
-                with gr.Column(scale=1):
-
-                    gr.Markdown("### Configuration")
+                if CHATBOT_TYPE == 2:
 
                     length = gr.Radio(
                         choices=["Short", "Long"],
@@ -483,55 +580,58 @@ with gr.Blocks() as demo:
                         label="Formality",
                     )
 
-
-                with gr.Column(scale=3):
-
-                    gr.ChatInterface(
-                        fn=chat,
-                        additional_inputs=[
-                            llm,
-                            selected_model,
-                            length,
-                            formality,
-                            session_id,
-                        ],
-                        description=(
-                            "Travel planning assistant. "
-                            "The system is currently unavailable."
-                        ),
+                    length.change(
+                        fn=on_length_change,
+                        inputs=[length, session_id],
+                        outputs=[],
                     )
 
+                    formality.change(
+                        fn=on_formality_change,
+                        inputs=[formality, session_id],
+                        outputs=[],
+                    )
 
-        # ============================================
-        # CHATBOT 1 Y 3: solo chat, sin configuración
-        # ============================================
+                elif CHATBOT_TYPE == 1:
+                    length = gr.State(value="Short")
+                    formality = gr.State(value="Informal")
 
-        else:
+                else:
+                    length = gr.State(value="Long")
+                    formality = gr.State(value="Formal")
 
-            if CHATBOT_TYPE == 1:
-                default_length = "Short"
-                default_formality = "Informal"
-            else:
-                default_length = "Long"
-                default_formality = "Formal"
+                gr.HTML("<div style='flex-grow: 1;'></div>")
 
-            length = gr.State(value=default_length)
-            formality = gr.State(value=default_formality)
+                finish_button = gr.Button(
+                    "Finish",
+                    variant="secondary",
+                )
 
-            gr.ChatInterface(
-                fn=chat,
-                additional_inputs=[
-                    llm,
-                    selected_model,
-                    length,
-                    formality,
-                    session_id,
-                ],
-                description=(
-                    "Travel planning assistant. "
-                    "The system is currently unavailable."
-                ),
-            )
+
+            # ------------------------------------------------
+            # CHAT
+            # ------------------------------------------------
+
+            with gr.Column(scale=3):
+
+                gr.ChatInterface(
+                    fn=chat,
+                    additional_inputs=[
+                        llm,
+                        selected_model,
+                        length,
+                        formality,
+                        session_id,
+                    ],
+                    
+                )
+
+
+    # --------------------------------------------------------
+    # ENCUESTA POST-INTERACCIÓN
+    # --------------------------------------------------------
+
+    survey_ui = surveys.build_survey_block()
 
 
     # --------------------------------------------------------
@@ -552,6 +652,35 @@ with gr.Blocks() as demo:
     )
 
 
+    # --------------------------------------------------------
+    # FINALIZAR CHAT Y ENCUESTA
+    # --------------------------------------------------------
+
+    finish_button.click(
+        fn=finish_chat,
+        inputs=[],
+        outputs=[
+            main_screen,
+            survey_ui["survey_screen"],
+        ],
+    )
+
+    survey_ui["submit_button"].click(
+        fn=surveys.submit_survey,
+        inputs=[
+            session_id,
+            selected_model,
+        ] + [
+            survey_ui["components"][field["id"]]
+            for field in surveys.SURVEY_FIELDS
+        ],
+        outputs=[
+            survey_ui["survey_screen"],
+            survey_ui["thank_you_screen"],
+        ],
+    )
+
+
 # ============================================================
 # EJECUTAR
 # ============================================================
@@ -561,6 +690,21 @@ demo.launch(
         #setup-screen {
             max-width: 600px;
             margin: 0 auto;
+        }
+        #main-row {
+            align-items: stretch;
+        }
+        #config-column {
+            display: flex;
+            flex-direction: column;
+        }
+        #thank-you-screen {
+            min-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
         }
     """
 )

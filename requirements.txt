@@ -1,3 +1,5 @@
 gradio
 python-dotenv
 langchain-openai
+transformers
+torch
