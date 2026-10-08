@@ -1,7 +1,7 @@
 """
-Instrumentos de encuesta post-interacción (NASA-TLX, S-TIAS, CSAT y
-cuestionario demográfico) junto con la construcción de su interfaz
-Gradio y el registro de las respuestas.
+Instrumentos de encuesta post-interacción (Frustration NASA-TLX,
+S-TIAS y CSAT) junto con la construcción de su interfaz Gradio y el
+registro de las respuestas.
 
 Los ítems usan las versiones estándar publicadas y están en inglés.
 """
@@ -15,48 +15,8 @@ from metrics import log_event
 # DEFINICIONES DE INSTRUMENTOS
 # ============================================================
 
-# NASA-TLX (Raw TLX): 6 dimensiones, escala 0-100.
+# NASA-TLX (Raw TLX): solo la dimensión de Frustración, escala 0-100.
 NASA_TLX_ITEMS = [
-    {
-        "id": "nasatlx_mental_demand",
-        "label": "Mental Demand",
-        "description": (
-            "How much mental and perceptual activity was required "
-            "(e.g., thinking, deciding, calculating, remembering)?"
-        ),
-    },
-    {
-        "id": "nasatlx_physical_demand",
-        "label": "Physical Demand",
-        "description": (
-            "How much physical activity was required "
-            "(e.g., pushing, pulling, turning, controlling)?"
-        ),
-    },
-    {
-        "id": "nasatlx_temporal_demand",
-        "label": "Temporal Demand",
-        "description": (
-            "How much time pressure did you feel due to the rate or "
-            "pace at which the tasks occurred?"
-        ),
-    },
-    {
-        "id": "nasatlx_performance",
-        "label": "Performance",
-        "description": (
-            "How successful do you think you were in accomplishing "
-            "what you were asked to do?"
-        ),
-    },
-    {
-        "id": "nasatlx_effort",
-        "label": "Effort",
-        "description": (
-            "How hard did you have to work to accomplish your level "
-            "of performance?"
-        ),
-    },
     {
         "id": "nasatlx_frustration",
         "label": "Frustration",
@@ -106,7 +66,7 @@ SURVEY_FIELDS = []
 for _item in NASA_TLX_ITEMS:
     SURVEY_FIELDS.append({
         "id": _item["id"],
-        "section": "NASA-TLX (Workload)",
+        "section": "Frustration (NASA-TLX)",
         "label": _item["label"],
         "description": _item["description"],
         "kind": "slider",

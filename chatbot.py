@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
 import formality as formality_clf
+import rag
 import surveys
 from metrics import (
     check_formality_compliance,
@@ -83,6 +84,7 @@ def create_llm(selected_model):
         api_key=api_key,
         base_url="https://api.deepinfra.com/v1/openai",
         temperature=0,
+        max_tokens=int(os.getenv("LLM_MAX_TOKENS", "300")),
     )
 
 
@@ -135,6 +137,19 @@ way.
 Before responding, verify internally that both conditions are met."""
 
 
+SCENARIO_PROMPT = """[SCENARIO]
+You are a flight-booking assistant. Stay strictly on flights and travel:
+greet briefly and help the user plan their trip. If the user brings up
+anything unrelated to flights or travel, politely decline and steer the
+conversation back to their trip.
+However, the flight-booking system is currently unreachable, so you cannot
+search for, check, or book any flights. Whenever the user asks to find,
+check, or book a flight, clearly say you cannot reach the booking system
+right now, and offer the SAME workaround every time: suggest they try again
+later or check the airline's website directly. Never invent flights,
+prices, schedules, or availability."""
+
+
 # ============================================================
 # REFINEMENTS POR MODELO
 # ============================================================
@@ -142,6 +157,11 @@ Before responding, verify internally that both conditions are met."""
 INFORMAL_REFINEMENT_SHARED = """You are texting a friend back. Not advising them, not helping them -
 just replying. Speak from your own experience: say what you did or
 what you’d do, never what "one can" or "you should" do."""
+
+
+FORMAL_LONG_REFINEMENT = """A formal answer here is
+economical, not padded: make your point in no more than 9 sentences
+and stop."""
 
 
 MODEL_REFINEMENTS = {
@@ -174,14 +194,10 @@ Start at least three sentences with "and", "but", "so",
 "also", "honestly", "i mean", or "yeah". Include at least one aside
 in the middle of a sentence, and at least one sentence fragment."""
         ),
-        "length": """Develop the topic in depth with examples where applicable."""
+        "length": """Develop the topic in depth with examples where applicable.""",
+        "formal": FORMAL_LONG_REFINEMENT,
     },
 }
-
-
-FORMAL_LONG_REFINEMENT = """A formal answer here is
-economical, not padded: make your point in no more than 9 sentences
-and stop."""
 
 
 # ============================================================
@@ -238,10 +254,15 @@ def build_system_prompt(
 
             formality_block = f"""{FORMALITY_FORMAL_PROMPT}"""
 
-            # Según el artículo, el refinement formal se aplica
-            # únicamente al nivel Long.
+            # Según blocks.yaml, el refinement formal se aplica
+            # únicamente al nivel Long y solo a Mistral.
             if length == "Long":
-                formality_block += f" {FORMAL_LONG_REFINEMENT}"
+                formal_refinement = MODEL_REFINEMENTS[
+                    selected_model
+                ].get("formal", "")
+
+                if formal_refinement:
+                    formality_block += f" {formal_refinement}"
 
         else:
 
@@ -275,8 +296,13 @@ def build_system_prompt(
 
         length_block = f"""{LENGTH_LONG_DEFINITION} {length_refinement}"""
 
-        formality_block = f"""{FORMALITY_FORMAL_PROMPT}
-{FORMAL_LONG_REFINEMENT}"""
+        formality_block = f"""{FORMALITY_FORMAL_PROMPT}"""
+
+        # Según blocks.yaml, el refinement formal se aplica solo a Mistral.
+        formal_refinement = MODEL_REFINEMENTS[selected_model].get("formal", "")
+
+        if formal_refinement:
+            formality_block += f"\n{formal_refinement}"
 
 
         return f"""{BASE_PROMPT}
@@ -305,10 +331,12 @@ def chat(
     session_id
 ):
     """
-    Envía solamente el mensaje actual al modelo.
+    Procesa el mensaje del usuario combinando cuatro fuentes:
 
-    El historial visual de Gradio NO se envía al LLM.
-    Por lo tanto, el chatbot no tiene memoria conversacional.
+    - Prompt experimental (sistema), según CHATBOT_TYPE/longitud/formalidad.
+    - Escenario de sistema de reservas inalcanzable (copiado de blocks.yaml).
+    - Contexto RAG recuperado de ChromaDB desde el PDF de la agencia.
+    - Historial conversacional completo de la sesión actual (memoria).
 
     Además de devolver la respuesta, registra las métricas del turno
     (timestamp, latencia, errores, etc.) de forma desacoplada.
@@ -322,16 +350,55 @@ def chat(
         query_text=message,
     )
 
+    # Contexto RAG: conocimiento externo recuperado del PDF.
+    # Si la recuperación falla, se continúa sin contexto.
+    try:
+        rag_context = rag.retrieve_context(message)
+    except Exception:
+        rag_context = ""
+
     messages = [
         {
             "role": "system",
             "content": system_prompt,
         },
-        {
-            "role": "user",
-            "content": message,
-        },
     ]
+
+    # Escenario: sistema de reservas inalcanzable (idéntico en las 3
+    # condiciones, copiado de blocks.yaml).
+    messages.append({
+        "role": "system",
+        "content": SCENARIO_PROMPT,
+    })
+
+    if rag_context:
+        messages.append({
+            "role": "system",
+            "content": (
+                "Relevant information from the travel agency "
+                "documentation:\n\n"
+                + rag_context
+            ),
+        })
+
+    # Memoria conversacional: historial completo de la sesión actual.
+    # El historial visual de Gradio ya incluye los turnos previos;
+    # aquí sí se reenvían al LLM para dar contexto conversacional.
+    for item in history:
+        if (
+            isinstance(item, dict)
+            and item.get("role")
+            and item.get("content") is not None
+        ):
+            messages.append({
+                "role": item["role"],
+                "content": item["content"],
+            })
+
+    messages.append({
+        "role": "user",
+        "content": message,
+    })
 
     # Valores efectivos según la condición experimental
     if CHATBOT_TYPE == 1:
